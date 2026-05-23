@@ -1,0 +1,8 @@
+services:
+  kafka-watchdog:
+    container_name: kafka-watchdog
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+

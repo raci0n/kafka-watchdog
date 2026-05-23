@@ -1,0 +1,14 @@
+kafka:
+  bootstrap_servers:
+    - "kafka1:9092"
+    - "kafka2:9092"
+    - "kafka3:9092"
+
+watchdogs:
+  - topic: "testing"
+    threshold: 60 # seconds
+    num_consumers: 1
+
+  - topic: "orders"
+    threshold: 300 # seconds
+    num_consumers: 3
