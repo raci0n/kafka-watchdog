@@ -100,10 +100,13 @@ jobs:
             --bootstrap-server kafka:9092 --topic testing2
 
       - name: Wait for Watchdog to process messages
-        run: sleep 5
-
-      - name: Test /readyz returns 200 after messages
-        run: curl -sf http://localhost:8000/readyz | grep -q ready
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/readyz)
+            if [ "$STATUS" = "200" ]; then echo "Data received"; break; fi
+            [ "$i" = "20" ] && (echo "Timeout: watchdog did not see any message"; exit 1)
+            sleep 2
+          done
 
       - name: Test /status returns 200 after messages
         run: curl -sf http://localhost:8000/status > /dev/null
