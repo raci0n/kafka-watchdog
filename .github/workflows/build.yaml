@@ -1,4 +1,4 @@
-name: Build Runner Image
+name: Build, Test and Push Image
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
       - 'VERSION'
 
 jobs:
-  build:
+  build-test-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,11 +23,115 @@ jobs:
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
           echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
 
-      - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
       - name: Build image
         run: docker build -t ghcr.io/${{ github.repository }}:${{ env.SHORT_SHA }} .
+
+      - name: Start Kafka
+        working-directory: testing
+        run: docker compose up -d kafka
+
+      - name: Wait for Kafka
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec kafka-watchdog-kafka-1 \
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list 2>/dev/null; then
+              echo "Kafka ready"; break
+            fi
+            sleep 2
+          done
+
+      - name: Start Watchdog
+        run: |
+          docker run -d \
+            --name watchdog \
+            --network testing_default \
+            -p 8000:8000 \
+            -v ${{ github.workspace }}/testing/config.yaml:/app/config.yaml:ro \
+            ghcr.io/${{ github.repository }}:${{ env.SHORT_SHA }}
+
+      - name: Wait for Watchdog
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "Watchdog ready"; break
+            fi
+            sleep 2
+          done
+
+      # --- endpoint tests ---
+
+      - name: Test /health
+        run: curl -sf http://localhost:8000/health | grep -q ok
+
+      - name: Test /livez
+        run: curl -sf http://localhost:8000/livez | grep -q alive
+
+      - name: Test /version
+        run: curl -sf http://localhost:8000/version | grep -q version
+
+      - name: Test /metrics
+        run: curl -sf http://localhost:8000/metrics | grep -q kafka_watchdog_topic_alarm
+
+      - name: Test /readyz returns 503 before any message
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/readyz)
+          [ "$STATUS" = "503" ] || (echo "Expected 503, got $STATUS"; exit 1)
+
+      - name: Test /status returns 503 before any message
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/status)
+          [ "$STATUS" = "503" ] || (echo "Expected 503, got $STATUS"; exit 1)
+
+      - name: Test /state shows UNKNOWN for testing1 and testing2
+        run: |
+          RESPONSE=$(curl -sf http://localhost:8000/state)
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing1") | .status == "UNKNOWN"'
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing2") | .status == "UNKNOWN"'
+
+      # --- watchdog logic: OK ---
+
+      - name: Publish messages to testing1 and testing2
+        run: |
+          echo "hello" | docker exec -i kafka-watchdog-kafka-1 \
+            /opt/kafka/bin/kafka-console-producer.sh \
+            --bootstrap-server kafka:9092 --topic testing1
+          echo "hello" | docker exec -i kafka-watchdog-kafka-1 \
+            /opt/kafka/bin/kafka-console-producer.sh \
+            --bootstrap-server kafka:9092 --topic testing2
+
+      - name: Wait for Watchdog to process messages
+        run: sleep 5
+
+      - name: Test /readyz returns 200 after messages
+        run: curl -sf http://localhost:8000/readyz | grep -q ready
+
+      - name: Test /status returns 200 after messages
+        run: curl -sf http://localhost:8000/status > /dev/null
+
+      - name: Test /state shows OK for testing1 and testing2
+        run: |
+          RESPONSE=$(curl -sf http://localhost:8000/state)
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing1") | .status == "OK"'
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing2") | .status == "OK"'
+
+      # --- watchdog logic: ERROR after silence ---
+
+      - name: Wait for alarm threshold (20s threshold + buffer)
+        run: sleep 25
+
+      - name: Test /status returns 200 after silence (ERROR is expected watchdog behavior)
+        run: curl -sf http://localhost:8000/status > /dev/null
+
+      - name: Test /state shows ERROR for testing1 and testing2
+        run: |
+          RESPONSE=$(curl -sf http://localhost:8000/state)
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing1") | .status == "ERROR"'
+          echo "$RESPONSE" | jq -e '.[] | select(.topic=="testing2") | .status == "ERROR"'
+
+      # --- push on success ---
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push SHA tag
         run: docker push ghcr.io/${{ github.repository }}:${{ env.SHORT_SHA }}

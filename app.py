@@ -152,8 +152,16 @@ def readyz():
 
 
 @app.get("/status")
+def status():
+    states = get_state()
+    ready = all(s["status"] != "UNKNOWN" for s in states)
+    body = {"status": "ok" if ready else "error", "version": VERSION, "states": states}
+    return JSONResponse(status_code=200 if ready else 503, content=body)
+
+
+@app.get("/state")
 def state():
-    return {"version": VERSION, "states": get_state()}
+    return get_state()
 
 
 @app.get("/metrics")
