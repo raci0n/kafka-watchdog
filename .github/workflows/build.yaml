@@ -28,12 +28,12 @@ jobs:
 
       - name: Start Kafka
         working-directory: testing
-        run: docker compose up -d kafka
+        run: docker compose -p kafka-watchdog up -d kafka
 
       - name: Wait for Kafka
         run: |
           for i in $(seq 1 30); do
-            if docker exec kafka-watchdog-kafka-1 \
+            if docker exec kafka \
                 /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list 2>/dev/null; then
               echo "Kafka ready"; break
             fi
@@ -44,7 +44,7 @@ jobs:
         run: |
           docker run -d \
             --name watchdog \
-            --network testing_default \
+            --network kafka-watchdog_default \
             -p 8000:8000 \
             -v ${{ github.workspace }}/testing/config.yaml:/app/config.yaml:ro \
             ghcr.io/${{ github.repository }}:${{ env.SHORT_SHA }}
@@ -92,10 +92,10 @@ jobs:
 
       - name: Publish messages to testing1 and testing2
         run: |
-          echo "hello" | docker exec -i kafka-watchdog-kafka-1 \
+          echo "hello" | docker exec -i kafka \
             /opt/kafka/bin/kafka-console-producer.sh \
             --bootstrap-server kafka:9092 --topic testing1
-          echo "hello" | docker exec -i kafka-watchdog-kafka-1 \
+          echo "hello" | docker exec -i kafka \
             /opt/kafka/bin/kafka-console-producer.sh \
             --bootstrap-server kafka:9092 --topic testing2
 

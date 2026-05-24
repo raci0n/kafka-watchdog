@@ -1,6 +1,7 @@
 services:
   kafka:
     image: apache/kafka:latest
+    container_name: kafka
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -17,9 +18,10 @@ services:
 
   watchdog:
     build: ../
+    container_name: kafka-watchdog
     ports:
       - "8000:8000"
     volumes:
-      - ../config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
       - kafka
